@@ -35,8 +35,12 @@ User --> AI Agent Client :8081
 * Spring Web MVC
 * Spring AI MCP Client
 * Spring AI Ollama
+* Spring Validation
+* Lombok
+* SpringDoc OpenAPI (Swagger)
 * Ollama
 * Qwen3:8b
+* JUnit 5
 
 ## Configuration
 
@@ -75,7 +79,16 @@ Client:
 http://localhost:8081
 ```
 
-## Request Flow
+## Architecture
+
+### Layered Architecture
+
+- **Controller Layer**: REST API endpoints for AI requests
+- **Service Layer**: Business logic for AI integration and MCP tool orchestration
+- **DTO Layer**: Data Transfer Objects for requests and responses
+- **Exception Layer**: Custom exceptions and global error handling
+
+### Request Flow
 
 The AI Agent Client receives a user's natural-language request.
 
@@ -95,22 +108,22 @@ Qwen3 generates the final natural-language response.
 
 ```text
 User
- |
+ :
  v
 AI Agent Client
- |
+ :
  +----------------------+
- |                      |
+ :                      :
  v                      v
 Ollama / Qwen3       MCP Client
-                         |
-                         | MCP
+                         :
+                         : MCP
                          v
                     MCP Server
-                         |
+                         :
                          v
                     Java Tools
-                         |
+                         :
                          v
                        Redis
 ```
@@ -289,22 +302,45 @@ This demonstrates the difference between a simple LLM chatbot and an Agent that 
 getOrderStatus(orderId)
 getOrders(status)
 cancelOrder(orderId)
+createOrder(customerId, totalAmount)
 getCustomerOrders(customerId)
 getPaymentStatus(orderId)
+processPayment(orderId, amount)
+```
+
+## REST API Endpoints
+
+### AI Query
+
+- `GET /ai?question={question}` - Ask a question via query parameter
+- `POST /ai` - Ask a question via request body
+
+### API Documentation
+
+Swagger UI is available at:
+```text
+http://localhost:8081/swagger-ui.html
+```
+
+OpenAPI spec:
+```text
+http://localhost:8081/v3/api-docs
 ```
 
 ## Test Examples
 
-### Order Status
+### Order Status (GET)
 
 ```text
 http://localhost:8081/ai?question=What%20is%20the%20status%20of%20order%20ORD-1001?
 ```
 
-### Customer Orders
+### Customer Orders (POST)
 
-```text
-http://localhost:8081/ai?question=Show%20me%20all%20orders%20for%20customer%20CUST-001
+```bash
+curl -X POST http://localhost:8081/ai \
+  -H "Content-Type: application/json" \
+  -d '{"question": "Show me all orders for customer CUST-001"}'
 ```
 
 ### Pending Orders
@@ -341,3 +377,63 @@ The MCP Server and Java services remain responsible for:
 * State changes
 
 This separation allows the LLM to handle reasoning and tool selection while the backend remains responsible for actual business operations.
+
+## Production-Ready Features
+
+### Error Handling
+- Custom exceptions for AI service and MCP server errors
+- Global exception handler with proper HTTP status codes
+- Structured error responses with timestamps
+
+### Validation
+- Input validation using Jakarta Validation
+- `@Valid` annotation on request bodies
+- Custom validation error messages
+- Question length validation (1-1000 characters)
+
+### Logging
+- SLF4J logging throughout the application
+- Structured logs with contextual information
+- Processing time tracking for AI requests
+- Different log levels (INFO, WARN, ERROR)
+
+### Response Enhancement
+- Structured AIResponse with:
+  - Answer text
+  - Timestamp
+  - Model name used
+  - Processing time in milliseconds
+
+### Testing
+- Integration tests with Spring Boot Test
+- Test property sources for configuration
+
+### Code Quality
+- Lombok for reducing boilerplate
+- Layered architecture for separation of concerns
+- DTO pattern for API contracts
+- Builder pattern for object creation
+
+## Response Format
+
+### Successful Response
+
+```json
+{
+  "answer": "The order ORD-1001 is currently in PENDING status",
+  "timestamp": "2026-09-26T12:00:00",
+  "model": "qwen3:8b",
+  "processingTimeMs": 1234
+}
+```
+
+### Error Response
+
+```json
+{
+  "timestamp": "2026-09-26T12:00:00",
+  "status": 503,
+  "error": "Service Unavailable",
+  "message": "AI service (Ollama) is unavailable: Connection refused"
+}
+```
