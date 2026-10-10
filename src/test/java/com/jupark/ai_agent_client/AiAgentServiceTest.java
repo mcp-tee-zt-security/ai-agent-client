@@ -11,7 +11,7 @@ import static org.junit.jupiter.api.Assertions.*;
 @TestPropertySource(properties = {
     "spring.ai.ollama.base-url=http://localhost:11434",
     "spring.ai.ollama.chat.options.model=qwen3:8b",
-    "spring.ai.mcp.client.streamable-http.connections.order-server.url=http://localhost:8080"
+    "zt.gateway.base-url=http://localhost:8080"
 })
 class AiAgentServiceIntegrationTest {
 
@@ -23,7 +23,7 @@ class AiAgentServiceIntegrationTest {
         assertNotNull(aiAgentService);
     }
 
-    // Note: This test requires Ollama and MCP Server to be running
+    // Note: This test requires Ollama and ZT Gateway to be running
     // Uncomment to run integration tests
     /*
     @Test

@@ -1,439 +1,151 @@
-# AI Agent Client
+# ZT-governed AI Agent Client
 
-Spring Boot 기반 AI Agent Client 프로젝트입니다.
-
-Ollama의 Qwen3 모델과 MCP Server를 연결하여 자연어 요청을 MCP Tool 호출로 처리합니다.
-
-## Overview
+Ollama selects tools; this application sends every business tool call through ZT.
 
 ```text
-                         Ollama :11434
-                         Qwen3:8b
-                              ^
-                              |
-                    LLM request / response
-                              |
-                              |
-User --> AI Agent Client :8081
-                  |
-                  | MCP
-                  v
-           MCP Server :8080
-                  |
-                  v
-           Java Services
-                  |
-                  v
-             Redis :6379
+User /ai :9999 ---- Ollama / Qwen3 :11434
+        |
+        v
+ZT Gateway :8080 (authentication, policy, risk and approval)
+        |
+        v
+Registered order MCP server :9998 ---- Order Redis
 ```
 
-## Technology
+The direct MCP connection to port 9998 is removed. There is no direct order-server fallback. Spring AI 2.0 ChatModel proposes tool calls and the application controls their execution. Credentials and endpoint configuration are never passed to the model.
 
-* Java 17
-* Spring Boot 4.1.1
-* Spring AI 2.0.1
-* Spring Web MVC
-* Spring AI MCP Client
-* Spring AI Ollama
-* Spring Validation
-* Lombok
-* SpringDoc OpenAPI (Swagger)
-* Ollama
-* Qwen3:8b
-* JUnit 5
+The API binds to 127.0.0.1:9999 for local development. Add inbound authentication and per-user ownership controls before exposing it. ZT identifies the configured service client, not individual users of this local API.
+
+## Register the service client
+
+Create once using the ZT administrator credential:
+
+```powershell
+$headers = @{
+    'X-API-Key' = 'dev-master-key'
+    'X-Tenant-Id' = '11111111-1111-1111-1111-111111111111'
+    'X-Workspace-Id' = '88888888-8888-8888-8888-888888888801'
+}
+$registration = Invoke-RestMethod -Method Post `
+    -Uri 'http://localhost:8080/v1/clients' -Headers $headers `
+    -ContentType 'application/json' -Body '{
+        "clientId":"order-ai-client",
+        "name":"Order AI Client",
+        "workspaceId":"88888888-8888-8888-8888-888888888801",
+        "scopes":[]
+    }'
+$env:ZT_ORDER_AGENT_SECRET = $registration.secret
+```
+
+The secret is returned only once. Store it securely. Do not recreate an existing client to obtain its secret. The agent verifies that ZT authenticates it as client:order-ai-client and refuses shared administrator credentials.
+
+For IDE launches, set ZT_ORDER_AGENT_SECRET in the Run Configuration. PowerShell environment changes do not configure an already running IDE process.
 
 ## Configuration
 
-`application.properties`
-
 ```properties
-spring.application.name=ai-agent-client
-
-server.port=8081
-
+server.port=9999
+server.address=127.0.0.1
 spring.ai.ollama.base-url=http://localhost:11434
 spring.ai.ollama.chat.options.model=qwen3:8b
-
-spring.ai.mcp.client.streamable-http.connections.order-server.url=http://localhost:8080
+zt.gateway.base-url=${ZT_GATEWAY_URL:http://localhost:8080}
+zt.gateway.client-id=${ZT_ORDER_AGENT_CLIENT_ID:order-ai-client}
+zt.gateway.api-key=${ZT_ORDER_AGENT_SECRET:}
+zt.gateway.tenant-id=${ZT_TENANT_ID:11111111-1111-1111-1111-111111111111}
+zt.gateway.workspace-id=${ZT_WORKSPACE_ID:88888888-8888-8888-8888-888888888801}
 ```
 
-## Running
+Use Java 17, Ollama, the ZT gateway and test order data. Defaults assume the agent runs on the host. Remote HTTP requires explicit zt.gateway.allow-http; otherwise use HTTPS. Requests use bounded response sizes and a total transport timeout, without redirects or application retries.
 
-The following components should be running:
+Missing credentials fail before execution; no administrator-key fallback exists. Startup does not register clients, seed orders or execute tools.
+
+## Dashboard setup
+
+Register the orders upstream at http://host.docker.internal:9998/mcp when ZT runs in Docker. Explicitly allow local development HTTP and load the tool definitions.
+
+Register getOrders, getOrderStatus and cancelOrder as needed. Include client:order-ai-client in every required tool binding. Retain api-key on a separate line for administrator dashboard tests if desired. Binding changes invalidate pending approvals.
+
+Activate a read policy:
 
 ```text
-Redis        :6379
-MCP Server   :8080
-Ollama       :11434
+policy "allow_order_reads" {
+  effect allow
+  principal.type == "AI_AGENT"
+  action == "mcp.tool.call"
+  resource.type == "mcp_tool"
+  condition {
+    context.mcp.tool == "getOrders"
+    or context.mcp.tool == "getOrderStatus"
+  }
+}
 ```
 
-Then start the AI Agent Client:
+For DENY testing, activate cancellation denial. For approval testing, allow cancellation through policy and enable Require independent approval, or use STEP_UP policy. Risk and behavior checks remain authoritative.
+
+If cancellation permits only TEST-ZT-001, use an isolated dataset. Listing unrelated pending orders may make the model request another order ID, correctly rejected by the schema.
+
+## Run and call
 
 ```powershell
-mvn spring-boot:run
+.\mvnw.cmd spring-boot:run
 ```
 
-Client:
+The existing endpoint remains:
 
 ```text
-http://localhost:8081
+http://localhost:9999/ai?question=Show%20me%20all%20pending%20orders%20and%20cancel%20them.
 ```
 
-## Architecture
+Or send a POST:
 
-### Layered Architecture
-
-- **Controller Layer**: REST API endpoints for AI requests
-- **Service Layer**: Business logic for AI integration and MCP tool orchestration
-- **DTO Layer**: Data Transfer Objects for requests and responses
-- **Exception Layer**: Custom exceptions and global error handling
-
-### Request Flow
-
-The AI Agent Client receives a user's natural-language request.
-
-The client sends the request to Qwen3 through Ollama together with the available MCP tool definitions.
-
-Qwen3 decides which tool should be used.
-
-The MCP Client invokes the selected tool on the MCP Server.
-
-The MCP Server executes the Java business logic.
-
-The Java service accesses Redis when required.
-
-The tool result is returned to Qwen3.
-
-Qwen3 generates the final natural-language response.
-
-```text
-User
- :
- v
-AI Agent Client
- :
- +----------------------+
- :                      :
- v                      v
-Ollama / Qwen3       MCP Client
-                         :
-                         : MCP
-                         v
-                    MCP Server
-                         :
-                         v
-                    Java Tools
-                         :
-                         v
-                       Redis
+```powershell
+Invoke-RestMethod -Method Post -Uri 'http://localhost:9999/ai' `
+    -ContentType 'application/json' `
+    -Body '{"question":"Show me all pending orders and cancel them."}'
 ```
 
-## Important Concept
+Read the catalog at GET /ai/tools. Each new question starts a new workflow. Do not resubmit a question to resume pending or uncertain execution.
 
-The LLM does not directly access Redis.
+## Responses
 
-The LLM also does not execute Java code.
+Existing answer/model/timestamp/processing-time fields remain. Added fields are executionStatus, callId, approvalId and toolExecutions. Each tool record includes gateway state, RPC ID and filtered result.
 
-Instead:
+| State | Meaning |
+| --- | --- |
+| NO_TOOL_EXECUTION | Model returned without a recorded tool call |
+| COMPLETED | Model returned after successful gateway results; inspect their business outcomes |
+| DENIED | ZT refused a tool; remaining tools stopped |
+| PENDING_APPROVAL | Saved request awaits approval; no later tools run |
+| UNKNOWN | Execution may have occurred; no automatic retry |
+| NOT_EXECUTED | Rejected input or pre-execution failure; workflow stopped |
+| TOOL_ERROR | Upstream reported a tool error; workflow stopped |
+| REPLAY_BLOCKED | ZT did not dispatch a repeated operation |
+| MODEL_ERROR_AFTER_TOOLS | Model failed after tools; review recorded results |
+| LIMIT_REACHED | Planning limit reached; earlier results remain visible |
 
-```text
-LLM
- |
- | Tool selection
- v
-MCP Client
- |
- | MCP request
- v
-MCP Server
- |
- | Java method execution
- v
-Redis / Backend
+Tools run sequentially and stop immediately on non-success. Earlier operations are not rolled back. Identical names and canonical arguments execute once per question and reuse the earlier result. Cached reads may describe an earlier state. This is not persistent deduplication between separate questions or upstream exactly-once execution.
+
+SUCCEEDED describes gateway receipt/recording. ORDER_CANNOT_BE_CANCELLED is not successful cancellation. Natural-language answers are not authoritative execution evidence.
+
+## Approve and resume
+
+Save the returned callId and approvalId. Use an independent approver in ZT MCP approvals, then resume through the original agent:
+
+```powershell
+Invoke-RestMethod -Method Post `
+    -Uri 'http://localhost:9999/ai/calls/<callId>/resume'
 ```
 
-The LLM receives tool definitions such as:
+Inspect at GET /ai/calls/<callId>. Resume forwards only the saved ID, accepts no replacement arguments or approval ID, and does not rerun Ollama or continue the whole task. ZT rechecks ownership, binding, expiry, approval and current policy. Resuming the first pending cancellation in a multi-order question does not automatically process other orders.
 
-```text
-cancelOrder(orderId)
-```
+If an uncertain response lacks a call ID, retain rpcId and reconcile gateway history/upstream state before another operation.
 
-It does not receive the implementation:
+## Evidence and limits
 
-```java
-redisTemplate.opsForHash()
-```
+ZT Call history should identify client:order-ai-client. Prove DENY using its gateway record and zero increase in the upstream cancelOrder counter. Read tools may execute before cancellation is denied.
 
-The actual implementation remains on the MCP Server.
+This change does not add an upstream counter or prevent a separate application from accessing the order server directly. Network and upstream credentials must enforce that boundary.
 
-## Example: Order Status
+Builds, tests, model requests and live business execution were not run for this implementation.
 
-User:
-
-```text
-What is the status of order ORD-1001?
-```
-
-Flow:
-
-```text
-1. AI Agent Client receives the question.
-
-2. The request and available tool definitions are sent
-   to Qwen3 through Ollama.
-
-3. Qwen3 determines that getOrderStatus is appropriate.
-
-4. MCP Client invokes:
-
-   getOrderStatus("ORD-1001")
-
-5. MCP Server executes OrderService.
-
-6. OrderService reads the order from Redis.
-
-7. Redis returns:
-
-   FILLED
-
-8. The tool result is returned to Qwen3.
-
-9. Qwen3 generates the final response.
-```
-
-## Example: Multi-Tool Agent
-
-User:
-
-```text
-What are the orders for CUST-001
-and what is the payment status of each order?
-```
-
-The Agent can perform multiple tool calls:
-
-```text
-getCustomerOrders("CUST-001")
-        |
-        +-- ORD-1001
-        +-- ORD-1002
-                |
-                v
-getPaymentStatus("ORD-1001")
-getPaymentStatus("ORD-1002")
-                |
-                v
-          Qwen3 summarizes
-```
-
-Example response:
-
-```text
-ORD-1001: PAID
-ORD-1002: PAYMENT_PENDING
-```
-
-## Example: Action Tool
-
-User:
-
-```text
-Cancel order ORD-1002
-```
-
-Flow:
-
-```text
-Qwen3
-  |
-  | selects cancelOrder("ORD-1002")
-  v
-MCP Client
-  |
-  | MCP
-  v
-MCP Server
-  |
-  v
-OrderService
-  |
-  v
-Redis
-  |
-  +-- PENDING -> CANCELLED
-```
-
-The LLM does not directly modify Redis.
-
-The Java service validates the order and performs the state change.
-
-## Example: Agentic Workflow
-
-A more complex request can combine several tools:
-
-```text
-Show me all pending orders and cancel the ones
-that can be cancelled.
-```
-
-Possible workflow:
-
-```text
-getOrders("PENDING")
-        |
-        v
-   ORD-1002
-        |
-        v
-cancelOrder("ORD-1002")
-        |
-        v
-     CANCELLED
-        |
-        v
-Qwen3 summarizes the result
-```
-
-This demonstrates the difference between a simple LLM chatbot and an Agent that can select and invoke tools.
-
-## Available MCP Tools
-
-```text
-getOrderStatus(orderId)
-getOrders(status)
-cancelOrder(orderId)
-createOrder(customerId, totalAmount)
-getCustomerOrders(customerId)
-getPaymentStatus(orderId)
-processPayment(orderId, amount)
-```
-
-## REST API Endpoints
-
-### AI Query
-
-- `GET /ai?question={question}` - Ask a question via query parameter
-- `POST /ai` - Ask a question via request body
-
-### API Documentation
-
-Swagger UI is available at:
-```text
-http://localhost:8081/swagger-ui.html
-```
-
-OpenAPI spec:
-```text
-http://localhost:8081/v3/api-docs
-```
-
-## Test Examples
-
-### Order Status (GET)
-
-```text
-http://localhost:8081/ai?question=What%20is%20the%20status%20of%20order%20ORD-1001?
-```
-
-### Customer Orders (POST)
-
-```bash
-curl -X POST http://localhost:8081/ai \
-  -H "Content-Type: application/json" \
-  -d '{"question": "Show me all orders for customer CUST-001"}'
-```
-
-### Pending Orders
-
-```text
-http://localhost:8081/ai?question=Show%20me%20all%20pending%20orders
-```
-
-### Payment Status
-
-```text
-http://localhost:8081/ai?question=What%20is%20the%20payment%20status%20of%20ORD-1001?
-```
-
-## Why Use an LLM?
-
-A normal REST API is usually simpler for a fixed operation.
-
-The Agent becomes useful when a user provides a natural-language request that may require different tools or multiple operations.
-
-The LLM handles:
-
-* Natural-language understanding
-* Tool selection
-* Parameter extraction
-* Multi-step tool orchestration
-* Final response generation
-
-The MCP Server and Java services remain responsible for:
-
-* Business logic
-* Validation
-* Data access
-* State changes
-
-This separation allows the LLM to handle reasoning and tool selection while the backend remains responsible for actual business operations.
-
-## Production-Ready Features
-
-### Error Handling
-- Custom exceptions for AI service and MCP server errors
-- Global exception handler with proper HTTP status codes
-- Structured error responses with timestamps
-
-### Validation
-- Input validation using Jakarta Validation
-- `@Valid` annotation on request bodies
-- Custom validation error messages
-- Question length validation (1-1000 characters)
-
-### Logging
-- SLF4J logging throughout the application
-- Structured logs with contextual information
-- Processing time tracking for AI requests
-- Different log levels (INFO, WARN, ERROR)
-
-### Response Enhancement
-- Structured AIResponse with:
-  - Answer text
-  - Timestamp
-  - Model name used
-  - Processing time in milliseconds
-
-### Testing
-- Integration tests with Spring Boot Test
-- Test property sources for configuration
-
-### Code Quality
-- Lombok for reducing boilerplate
-- Layered architecture for separation of concerns
-- DTO pattern for API contracts
-- Builder pattern for object creation
-
-## Response Format
-
-### Successful Response
-
-```json
-{
-  "answer": "The order ORD-1001 is currently in PENDING status",
-  "timestamp": "2026-09-26T12:00:00",
-  "model": "qwen3:8b",
-  "processingTimeMs": 1234
-}
-```
-
-### Error Response
-
-```json
-{
-  "timestamp": "2026-09-26T12:00:00",
-  "status": 503,
-  "error": "Service Unavailable",
-  "message": "AI service (Ollama) is unavailable: Connection refused"
-}
-```
+API references: [Spring AI Tool Calling](https://docs.spring.io/spring-ai/reference/api/tools.html), [ToolCallback](https://docs.spring.io/spring-ai/docs/current/api/org/springframework/ai/tool/ToolCallback.html).

@@ -16,4 +16,8 @@ public class AIResponse {
     private LocalDateTime timestamp;
     private String model;
     private long processingTimeMs;
+    private String executionStatus;
+    private String callId;
+    private String approvalId;
+    private java.util.List<com.jupark.ai_agent_client.zt.ToolExecution> toolExecutions;
 }

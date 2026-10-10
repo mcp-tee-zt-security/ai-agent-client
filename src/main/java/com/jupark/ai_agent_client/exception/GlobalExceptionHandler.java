@@ -59,6 +59,22 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
     }
 
+    @ExceptionHandler(com.jupark.ai_agent_client.zt.ZtGatewayClient.Failure.class)
+    public ResponseEntity<ErrorResponse> handleZtFailure(com.jupark.ai_agent_client.zt.ZtGatewayClient.Failure ex) {
+        ErrorResponse error = ErrorResponse.builder().timestamp(LocalDateTime.now())
+                .status(HttpStatus.BAD_GATEWAY.value()).error("ZT Gateway Unavailable")
+                .message(ex.getMessage()).build();
+        return ResponseEntity.status(HttpStatus.BAD_GATEWAY).body(error);
+    }
+
+    @ExceptionHandler(IllegalArgumentException.class)
+    public ResponseEntity<ErrorResponse> handleInvalidRequest(IllegalArgumentException ex) {
+        ErrorResponse error = ErrorResponse.builder().timestamp(LocalDateTime.now())
+                .status(HttpStatus.BAD_REQUEST.value()).error("Bad Request")
+                .message(ex.getMessage()).build();
+        return ResponseEntity.badRequest().body(error);
+    }
+
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ErrorResponse> handleGenericException(Exception ex) {
         log.error("Unexpected error occurred", ex);
